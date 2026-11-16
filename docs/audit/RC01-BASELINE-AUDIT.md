@@ -162,3 +162,4 @@ All identified vulnerabilities are classified according to OWASP Top 10 API Secu
 
 ---
 *Report certified by Principal Architect & Lead Security Engineer.*
+

@@ -42,3 +42,4 @@
 - [x] Overdraft facility is strictly separated from cash assets.
 - [x] Missing financial sources are marked as `PENDING_DATA` instead of zero defaults.
 - [x] File import enforces SHA256 duplicate rejection and supported file formats (PDF, XLSX, CSV).
+

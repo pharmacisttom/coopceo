@@ -47,3 +47,4 @@ sequenceDiagram
    - Delivered strictly via `HttpOnly; SameSite=Strict; Secure` cookies.
    - Idle timeout enforced at 30 minutes.
    - Absolute session timeout enforced at 8 hours.
+

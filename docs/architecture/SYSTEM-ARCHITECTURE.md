@@ -61,3 +61,4 @@ flowchart TB
 ### 2.4 Analytics Worker (FastAPI)
 - Evaluates Liquidity Coverage Ratios (LCR) and tracks bond maturity schedules (30, 15, 7, 1 days).
 - Emits pre-validated events to the NestJS internal event dispatcher via shared internal secrets.
+

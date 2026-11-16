@@ -196,3 +196,4 @@ describe('Phase 1 Security Tests: Maker-Checker Segregation & Integrity', () => 
     ).toThrow(ForbiddenException);
   });
 });
+

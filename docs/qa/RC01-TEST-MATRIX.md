@@ -11,3 +11,4 @@
 | **File Import** | Unit | SHA256 checksum duplicate rejection, Type check | Crypto Hash Engine | 100% Import Handlers |
 | **UI SweetAlert2** | E2E | Non-dismissible loading, Navy/Cyan/Gold theme, ARIA | Playwright | 100% Critical Modals |
 | **Infrastructure** | DevOps Audit | Port isolation (8080/8443), Non-root, Healthchecks | Bash pre-flight script | 100% Containers |
+

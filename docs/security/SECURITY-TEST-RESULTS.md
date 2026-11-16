@@ -34,3 +34,4 @@
 |---|---|---|---|---|
 | **TC-NT01** | Event deduplication drops duplicate event IDs | First event passes (true), second dropped (false) | Deduplication verified | **PASS** |
 | **TC-NT02** | Sensitive financial account numbers masked | Full account replaced with `xxx-x-xx56789-0` | Masking verified | **PASS** |
+

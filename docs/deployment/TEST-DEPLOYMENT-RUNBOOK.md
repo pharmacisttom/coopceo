@@ -52,3 +52,4 @@ Verify all containers report `(healthy)`.
 
 - **Direct Port:** `http://127.0.0.1:8080` or `https://127.0.0.1:8443`
 - **Host Nginx Proxy (Optional):** Route subdomain `test.rycoop.coop` to `127.0.0.1:8080` via host reverse proxy block without touching port 80/443 root configs.
+

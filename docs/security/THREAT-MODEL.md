@@ -29,3 +29,4 @@ flowchart LR
 | **Information Disclosure (I)** | Unauthenticated user connects to SSE stream or reads notifications with full account numbers | Bank account leakage | SessionAuthGuard on SSE stream, Default-Deny role filtering, automated account number masking (`xxx-x-xx56789-0`). |
 | **Denial of Service (D)** | Brute force attacks on Step-Up MFA or port collisions with live Production Nginx | System outage / lockouts | Test ports moved to 8080/8443 (zero impact on Prod 80/443), Nginx rate limiting (10 req/min on auth), 5-attempt MFA lockout. |
 | **Elevation of Privilege (E)** | Maker approves own proposal or Admin bypasses Maker-Checker flow | Insider fraud | Hard backend segregation (`makerId != checkerId`), Admin cannot inherit Maker/Checker roles. |
+

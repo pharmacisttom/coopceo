@@ -64,3 +64,4 @@ describe('Phase 2 & 3 Security Tests: Auth & Session Protection', () => {
     }).toThrow(/locked/i);
   });
 });
+

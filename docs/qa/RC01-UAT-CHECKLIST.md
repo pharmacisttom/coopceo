@@ -39,3 +39,4 @@
 - [x] Overdraft facility is strictly separated from cash assets.
 - [x] Bond carrying value and weighted average yields calculate accurately.
 - [x] Liquidity Coverage Ratio (LCR) reflects cooperative regulatory safety margins.
+

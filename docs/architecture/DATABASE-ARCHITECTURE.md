@@ -96,3 +96,4 @@ erDiagram
    `event_id` in `notifications` is constrained by a `UNIQUE` index.
 4. **Optimistic Versioning:**
    The `version` integer in `investment_proposals` is incremented on every state transition to detect concurrent writes.
+

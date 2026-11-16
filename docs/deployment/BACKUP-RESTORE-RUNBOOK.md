@@ -27,3 +27,4 @@ bash scripts/restore-db.sh /var/backups/rycoop/rycoop_db_<TIMESTAMP>.sql.gz
 1. Checks SHA256 hash against archive.
 2. Ingests schema and data into PostgreSQL container.
 3. Executes post-restore sanity query checking row counts for `users`, `notifications`, `investment_proposals`, and `audit_logs`.
+

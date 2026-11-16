@@ -42,3 +42,4 @@ If a security compromise or unexpected performance degradation is observed:
 docker compose --project-name rycoop-smart-finance-test down
 ```
 All persistent database state is preserved in Docker volume `rycoop_test_pgdata_vol`.
+

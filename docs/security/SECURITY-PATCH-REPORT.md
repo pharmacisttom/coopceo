@@ -54,3 +54,4 @@
   - Changed container port bindings from host `80:80` and `443:443` to `127.0.0.1:8080:80` and `127.0.0.1:8443:443`.
   - Ensured host ports 80 and 443 are untouched, leaving existing live Production Nginx intact.
   - Added `security_opt: [ "no-new-privileges:true" ]` across all containers.
+
