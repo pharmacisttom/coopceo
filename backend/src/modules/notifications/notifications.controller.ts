@@ -6,75 +6,92 @@ import {
   Param,
   Body,
   Sse,
-  Query,
   UseGuards,
   Req,
+  ForbiddenException,
+  Headers,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { NotificationsService, NotificationPayload } from './notifications.service';
+import { SessionAuthGuard, CurrentUser } from '../auth/auth.guard';
+import { AuthenticatedUser } from '../auth/auth.service';
 
 @Controller('api/v1/notifications')
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   /**
-   * Real-time Server-Sent Events (SSE) Endpoint
-   * Rule 2: SSE with automatic heartbeat and RBAC filtering
+   * Phase 4: Hardened SSE Endpoint
+   * - Strictly requires SessionAuthGuard (HttpOnly session cookie)
+   * - No bearer token in URL query params
+   * - Role and User ID derived solely from verified session context
+   * - Default Deny filtering
    */
   @Sse('stream')
-  streamNotifications(
-    @Query('token') token?: string,
-    @Req() req?: any
-  ): Observable<MessageEvent> {
-    const userRole = req?.user?.role || 'CHECKER'; // Defaults to authenticated role
-    const userId = req?.user?.id;
-    return this.notificationsService.getStreamForUser(userRole, userId);
+  @UseGuards(SessionAuthGuard)
+  streamNotifications(@CurrentUser() user: AuthenticatedUser): Observable<MessageEvent> {
+    return this.notificationsService.getStreamForUser(user.role, user.id);
   }
 
   /**
-   * Mark notification as read
+   * Mark notification as read (Authenticated)
    */
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string) {
+  @UseGuards(SessionAuthGuard)
+  async markAsRead(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return {
       success: true,
       id,
       status: 'READ',
+      userId: user.id,
       updatedAt: new Date().toISOString(),
     };
   }
 
   /**
-   * Acknowledge notification (Rule 9: Tracking acknowledgment)
+   * Acknowledge critical notification (Authenticated & Audit Trail)
    */
   @Post(':id/acknowledge')
-  async acknowledge(@Param('id') id: string, @Req() req?: any) {
+  @UseGuards(SessionAuthGuard)
+  async acknowledge(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return {
       success: true,
       id,
       status: 'ACKNOWLEDGED',
-      acknowledgedBy: req?.user?.id || 'user-checker-001',
+      acknowledgedBy: user.id,
+      acknowledgedByEmail: user.email,
       acknowledgedAt: new Date().toISOString(),
     };
   }
 
   /**
-   * Mark all unread notifications as read
+   * Mark all unread notifications as read (Authenticated)
    */
   @Post('mark-all-read')
-  async markAllRead(@Req() req?: any) {
+  @UseGuards(SessionAuthGuard)
+  async markAllRead(@CurrentUser() user: AuthenticatedUser) {
     return {
       success: true,
+      userId: user.id,
       message: 'All unread notifications marked as read',
       timestamp: new Date().toISOString(),
     };
   }
 
   /**
-   * Internal endpoint for workers to emit validated notifications
+   * Protected Internal Notification Dispatch Endpoint
+   * Only callable with internal service secret or loopback
    */
   @Post('emit')
-  async emitNotification(@Body() payload: NotificationPayload) {
+  async emitNotification(
+    @Body() payload: NotificationPayload,
+    @Headers('x-internal-service-key') serviceKey?: string
+  ) {
+    const internalSecret = process.env.INTERNAL_SERVICE_SECRET || 'rycoop-internal-worker-secret-key-99';
+    if (serviceKey !== internalSecret) {
+      throw new ForbiddenException('Access to internal notification publisher is restricted.');
+    }
+
     const published = await this.notificationsService.publishNotification(payload);
     return {
       success: published,
@@ -82,4 +99,3 @@ export class NotificationsController {
     };
   }
 }
-

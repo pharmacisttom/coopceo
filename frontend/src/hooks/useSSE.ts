@@ -6,8 +6,8 @@ export type NotificationStatus = 'UNREAD' | 'READ' | 'ACKNOWLEDGED';
 export type NotificationCategory = 'NEW_BANK_DATA' | 'BOND_MATURITY' | 'LOW_LIQUIDITY' | 'INVESTMENT_PENDING_APPROVAL' | 'SYSTEM';
 
 export interface CoopNotification {
-  id: string; // UUID
-  eventId: string; // Deduplication Key
+  id: string;
+  eventId: string;
   title: string;
   message: string;
   category: NotificationCategory;
@@ -22,26 +22,35 @@ export interface CoopNotification {
 
 interface UseSSEOptions {
   url?: string;
-  authToken?: string;
   enabled?: boolean;
   onNewNotification?: (notification: CoopNotification) => void;
+  onAuthError?: () => void;
 }
 
 export function useSSE({
   url = '/api/v1/notifications/stream',
-  authToken,
   enabled = true,
   onNewNotification,
+  onAuthError,
 }: UseSSEOptions = {}) {
   const [notifications, setNotifications] = useState<CoopNotification[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [unreadCount, setUnreadCount] = useState<number>(0);
-  
-  // Deduplication cache: tracks eventIds seen in last 10 minutes to prevent duplicate alerts
+
+  // LRU / Set for deduplication (tracks eventIds seen in last 10 minutes)
   const seenEventIds = useRef<Set<string>>(new Set());
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef<number>(0);
+  const maxRetries = 10;
+  const isUnmountedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isUnmountedRef.current = false;
+    return () => {
+      isUnmountedRef.current = true;
+    };
+  }, []);
 
   // Recalculate unread count
   useEffect(() => {
@@ -57,6 +66,7 @@ export function useSSE({
       await fetch(`/api/v1/notifications/${id}/read`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
       });
     } catch (err) {
       console.warn('Failed to sync markAsRead to backend', err);
@@ -71,11 +81,14 @@ export function useSSE({
       )
     );
     try {
-      await fetch(`/api/v1/notifications/${id}/acknowledge`, {
+      const res = await fetch(`/api/v1/notifications/${id}/acknowledge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
       });
-      alertService.toast('บันทึกการรับทราบเรียบร้อยแล้ว', 'success', 'top-end', 2000);
+      if (res.ok) {
+        alertService.toast('บันทึกการรับทราบเรียบร้อยแล้ว', 'success', 'top-end', 2000);
+      }
     } catch (err) {
       console.error('Failed to sync acknowledge to backend', err);
       alertService.toast('ไม่สามารถบันทึกการรับทราบได้', 'error');
@@ -90,6 +103,7 @@ export function useSSE({
       await fetch('/api/v1/notifications/mark-all-read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
       });
     } catch (err) {
       console.warn('Failed to sync markAllAsRead', err);
@@ -97,43 +111,43 @@ export function useSSE({
   }, []);
 
   const connect = useCallback(() => {
-    if (!enabled || typeof window === 'undefined') return;
+    if (!enabled || typeof window === 'undefined' || isUnmountedRef.current) return;
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
-    const sseUrl = authToken ? `${url}?token=${encodeURIComponent(authToken)}` : url;
-    const es = new EventSource(sseUrl, { withCredentials: true });
+    // Phase 4: Never append token to query string! Rely on HttpOnly session cookie
+    const es = new EventSource(url, { withCredentials: true });
     eventSourceRef.current = es;
 
     es.onopen = () => {
+      if (isUnmountedRef.current) return;
       setIsConnected(true);
       retryCountRef.current = 0;
-      console.log('[SSE] Notification stream connected.');
     };
 
     es.addEventListener('notification', (event: MessageEvent) => {
+      if (isUnmountedRef.current) return;
       try {
         const payload: CoopNotification = JSON.parse(event.data);
 
         // Deduplication Guard: Ignore if we have seen this eventId recently
         if (seenEventIds.current.has(payload.eventId)) {
-          console.warn(`[SSE] Duplicate event detected and dropped: ${payload.eventId}`);
           return;
         }
 
         seenEventIds.current.add(payload.eventId);
-        // Evict if cache exceeds 1,000 items
         if (seenEventIds.current.size > 1000) {
           const firstKey = seenEventIds.current.values().next().value;
           if (firstKey) seenEventIds.current.delete(firstKey);
         }
 
-        // Prepend new notification
-        setNotifications((prev) => [payload, ...prev]);
+        // Bound in-memory state: keep at most 500 notifications
+        setNotifications((prev) => [payload, ...prev].slice(0, 500));
 
-        // Trigger toast/alert based on Priority
+        // Priority Toast
         if (payload.priority === 'CRITICAL') {
           alertService.toast(`[สำคัญเร่งด่วน] ${payload.title}`, 'error', 'top-end', 6000);
         } else if (payload.priority === 'WARNING') {
@@ -153,12 +167,22 @@ export function useSSE({
     });
 
     es.onerror = (err) => {
-      console.warn('[SSE] Connection error or server offline. Reconnecting...', err);
+      if (isUnmountedRef.current) return;
       setIsConnected(false);
       es.close();
+      eventSourceRef.current = null;
 
-      // Exponential backoff reconnect: 1s, 2s, 4s, 8s, max 15s
-      const retryDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 15000);
+      // Stop reconnecting if max retries exceeded
+      if (retryCountRef.current >= maxRetries) {
+        console.warn('[SSE] Max connection retries reached. Stopping reconnection.');
+        onAuthError?.();
+        return;
+      }
+
+      // Exponential backoff with jitter
+      const baseDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 15000);
+      const jitter = Math.random() * 500;
+      const retryDelay = baseDelay + jitter;
       retryCountRef.current += 1;
 
       if (reconnectTimeoutRef.current) {
@@ -166,20 +190,25 @@ export function useSSE({
       }
 
       reconnectTimeoutRef.current = setTimeout(() => {
-        connect();
+        if (!isUnmountedRef.current) {
+          connect();
+        }
       }, retryDelay);
     };
-  }, [enabled, url, authToken, onNewNotification]);
+  }, [enabled, url, onNewNotification, onAuthError]);
 
   useEffect(() => {
     connect();
 
     return () => {
+      isUnmountedRef.current = true;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
     };
   }, [connect]);
@@ -194,4 +223,3 @@ export function useSSE({
     markAllAsRead,
   };
 }
-
