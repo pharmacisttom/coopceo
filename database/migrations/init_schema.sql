@@ -160,3 +160,4 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events(status, created_at) WHERE status = 'PENDING';
+

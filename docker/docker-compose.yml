@@ -173,3 +173,4 @@ volumes:
     name: rycoop_test_pgdata_vol
   rycoop_test_redisdata:
     name: rycoop_test_redisdata_vol
+

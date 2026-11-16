@@ -108,3 +108,4 @@ describe('SweetAlert2 Centralized Alert Service (RYCOOP Standard)', () => {
     );
   });
 });
+

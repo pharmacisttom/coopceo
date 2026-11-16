@@ -199,3 +199,4 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
 };
 
 export default MakerCheckerModal;
+

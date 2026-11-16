@@ -41,3 +41,4 @@ SELECT
 "
 
 echo "=== [RYCOOP RESTORE] Restore drill completed successfully at $(date) ==="
+

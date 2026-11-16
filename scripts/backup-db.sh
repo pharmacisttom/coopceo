@@ -30,3 +30,4 @@ echo "Checksum: $(cat "${BACKUP_FILE}.sha256")"
 # Retain backups for 14 days, delete older
 find "$BACKUP_DIR" -type f -name "rycoop_db_*.sql.gz*" -mtime +14 -exec rm {} \;
 echo "=== [RYCOOP BACKUP] Retention check complete ==="
+

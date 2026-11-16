@@ -209,3 +209,4 @@ export const InvestmentApprovalTable: React.FC = () => {
 };
 
 export default InvestmentApprovalTable;
+

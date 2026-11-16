@@ -89,3 +89,4 @@ test.describe('RYCOOP Smart Finance — UI Alert, Notification & Maker-Checker E
     await expect(page.locator('text=อนุมัติการลงทุนเรียบร้อย')).toBeVisible({ timeout: 5000 });
   });
 });
+

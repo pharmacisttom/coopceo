@@ -54,3 +54,4 @@
 2. ตรวจสอบบันทึกความปลอดภัย: `SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '24 hours';`
 3. ตรวจสอบคิว Outbox ที่ตกค้าง: `SELECT COUNT(*) FROM outbox_events WHERE status = 'PENDING';`
 4. ยืนยันสถานะ Backup ประจำวันใน `/var/backups/rycoop/`
+

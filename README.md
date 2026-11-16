@@ -141,3 +141,4 @@ docker compose logs -f nginx backend
 
 ### 5. เปิดทดสอบแดชบอร์ด
 เข้าใช้งานที่ `https://test.rycoop.coop` หรือ `http://localhost:3000` เพื่อทดลองการทำงานของ SweetAlert2, Notification Center และ Maker-Checker แบบอินเทอร์แอคทีฟ
+

@@ -57,3 +57,4 @@ docker compose logs --tail=100 backend
 | **Database Administrator (DBA)** | ดึงไฟล์สำรอง ตรวจสอบ Checksum และรันสคริปต์ Restore |
 | **DevOps / Infra Engineer** | ตรวจสอบ VPS, จัดเตรียม Docker Network และ SSL/TLS |
 | **Finance Application Lead** | ทำการทดสอบธุรกรรมทางการเงินและตรวจสอบยอดกระทบยอด (Reconciliation) |
+

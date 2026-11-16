@@ -12,3 +12,4 @@ ENV PORT=3001
 COPY --from=builder /app ./
 EXPOSE 3001
 CMD ["npm", "start"]
+

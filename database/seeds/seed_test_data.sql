@@ -73,3 +73,4 @@ INSERT INTO investment_proposals (
     'a0000000-0000-0000-0000-000000000001',
     'จัดซื้อผ่านสถาบันการเงินพันธมิตรในราคาหน้าตั๋ว'
 ) ON CONFLICT (reference_id) DO NOTHING;
+

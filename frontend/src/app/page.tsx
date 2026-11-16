@@ -536,3 +536,4 @@ export default function SmartFinanceDashboard() {
     </div>
   );
 }
+
