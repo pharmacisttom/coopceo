@@ -4,9 +4,7 @@ name: rycoop-smart-finance-test
 
 services:
   # 1. Reverse Proxy with TLS & SSE Buffering Configuration
-  # CRITICAL SECURITY FIX: Never bind directly to host 80 or 443!
-  # Live Cooperative VPS already runs production Nginx on 80/443.
-  # We bind TEST Nginx to host 8080/8443 (accessible via host reverse proxy).
+  # Bound strictly to 127.0.0.1 (Never exposes 80/443 to host network)
   nginx:
     image: nginx:1.27-alpine
     container_name: rycoop_test_nginx
@@ -23,7 +21,8 @@ services:
       backend:
         condition: service_healthy
     networks:
-      - rycoop_test_net
+      - ingress_net
+      - app_net
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -32,7 +31,7 @@ services:
           cpus: '0.50'
           memory: 256M
 
-  # 2. Next.js Frontend with SweetAlert2 & Notification Center
+  # 2. Next.js Frontend
   frontend:
     build:
       context: ../frontend
@@ -43,7 +42,8 @@ services:
       - NODE_ENV=production
       - PORT=3000
     networks:
-      - rycoop_test_net
+      - ingress_net
+      - app_net
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -60,7 +60,7 @@ services:
         reservations:
           memory: 512M
 
-  # 3. NestJS Backend API & Real-time SSE Service
+  # 3. NestJS Backend API
   backend:
     build:
       context: ../backend
@@ -69,12 +69,19 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=test
+      - APP_ENV=test
       - PORT=3001
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
       - JWT_SECRET=${JWT_SECRET}
-      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-rycoop-internal-worker-secret-key-99}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CALLBACK_URL=${GOOGLE_CALLBACK_URL}
+      - WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID}
+      - WEBAUTHN_ORIGIN=${WEBAUTHN_ORIGIN}
       - COOKIE_DOMAIN=test.rycoop.coop
     depends_on:
       postgres:
@@ -82,7 +89,8 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - rycoop_test_net
+      - app_net
+      - data_net
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -99,7 +107,7 @@ services:
         reservations:
           memory: 512M
 
-  # 4. Python FastAPI Analytics Worker (Liquidity & Bond Monitor)
+  # 4. Python FastAPI Analytics Worker
   analytics-worker:
     build:
       context: ../analytics-worker
@@ -110,12 +118,12 @@ services:
       - PYTHONUNBUFFERED=1
       - ENVIRONMENT=test
       - BACKEND_API_URL=http://backend:3001
-      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-rycoop-internal-worker-secret-key-99}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
     depends_on:
       backend:
         condition: service_healthy
     networks:
-      - rycoop_test_net
+      - app_net
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -129,8 +137,7 @@ services:
           cpus: '1.0'
           memory: 1024M
 
-  # 5. PostgreSQL 16 Database
-  # CRITICAL: Ports are NOT published to host network (accessible ONLY within rycoop_test_net)
+  # 5. PostgreSQL 16 Database (Isolated from public and frontend networks)
   postgres:
     image: postgres:16-alpine
     container_name: rycoop_test_postgres
@@ -144,7 +151,7 @@ services:
       - ../database/migrations/init_schema.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
       - ../database/seeds/seed_test_data.sql:/docker-entrypoint-initdb.d/02_seeds.sql:ro
     networks:
-      - rycoop_test_net
+      - data_net
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -160,8 +167,7 @@ services:
         reservations:
           memory: 512M
 
-  # 6. Redis 7 for BullMQ & SSE Deduplication Cache
-  # CRITICAL: Ports are NOT published to host network
+  # 6. Redis 7 (Isolated from public and frontend networks)
   redis:
     image: redis:7-alpine
     container_name: rycoop_test_redis
@@ -170,7 +176,7 @@ services:
     volumes:
       - rycoop_test_redisdata:/data
     networks:
-      - rycoop_test_net
+      - data_net
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -184,10 +190,21 @@ services:
           cpus: '0.5'
           memory: 512M
 
+# Network Segmentation:
+# - ingress_net: Nginx to Frontend (Public Facing Ingress)
+# - app_net: Nginx to Backend, Frontend to Backend, Analytics to Backend
+# - data_net: Backend to Postgres & Redis (Zero external exposure)
 networks:
-  rycoop_test_net:
+  ingress_net:
     driver: bridge
-    name: rycoop_isolated_test_network
+    name: rycoop_test_ingress_net
+  app_net:
+    driver: bridge
+    name: rycoop_test_app_net
+  data_net:
+    driver: bridge
+    internal: true
+    name: rycoop_test_data_net
 
 volumes:
   rycoop_test_pgdata:
