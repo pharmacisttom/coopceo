@@ -1,14 +1,19 @@
 version: '3.8'
 
+name: rycoop-smart-finance-test
+
 services:
   # 1. Reverse Proxy with TLS & SSE Buffering Configuration
+  # CRITICAL SECURITY FIX: Never bind directly to host 80 or 443!
+  # Live Cooperative VPS already runs production Nginx on 80/443.
+  # We bind TEST Nginx to host 8080/8443 (accessible via host reverse proxy).
   nginx:
     image: nginx:1.27-alpine
     container_name: rycoop_test_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
@@ -19,6 +24,8 @@ services:
         condition: service_healthy
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -37,6 +44,8 @@ services:
       - PORT=3000
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
       interval: 15s
@@ -65,6 +74,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - JWT_SECRET=${JWT_SECRET}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-rycoop-internal-worker-secret-key-99}
       - COOKIE_DOMAIN=test.rycoop.coop
     depends_on:
       postgres:
@@ -73,6 +83,8 @@ services:
         condition: service_healthy
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
       interval: 15s
@@ -98,11 +110,14 @@ services:
       - PYTHONUNBUFFERED=1
       - ENVIRONMENT=test
       - BACKEND_API_URL=http://backend:3001
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET:-rycoop-internal-worker-secret-key-99}
     depends_on:
       backend:
         condition: service_healthy
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 20s
@@ -114,7 +129,8 @@ services:
           cpus: '1.0'
           memory: 1024M
 
-  # 5. PostgreSQL 16 Database (Isolated from RYCOOPWEB Production)
+  # 5. PostgreSQL 16 Database
+  # CRITICAL: Ports are NOT published to host network (accessible ONLY within rycoop_test_net)
   postgres:
     image: postgres:16-alpine
     container_name: rycoop_test_postgres
@@ -129,6 +145,8 @@ services:
       - ../database/seeds/seed_test_data.sql:/docker-entrypoint-initdb.d/02_seeds.sql:ro
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -143,6 +161,7 @@ services:
           memory: 512M
 
   # 6. Redis 7 for BullMQ & SSE Deduplication Cache
+  # CRITICAL: Ports are NOT published to host network
   redis:
     image: redis:7-alpine
     container_name: rycoop_test_redis
@@ -152,6 +171,8 @@ services:
       - rycoop_test_redisdata:/data
     networks:
       - rycoop_test_net
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -173,4 +194,3 @@ volumes:
     name: rycoop_test_pgdata_vol
   rycoop_test_redisdata:
     name: rycoop_test_redisdata_vol
-
