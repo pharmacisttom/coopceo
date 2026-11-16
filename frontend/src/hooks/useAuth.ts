@@ -62,33 +62,12 @@ export function useAuth() {
     }
   }, []);
 
-  const loginAsTestUser = useCallback(async (email: string) => {
-    try {
-      const res = await fetch('/api/v1/auth/test-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-        credentials: 'same-origin',
-      });
-      const data = await res.json();
-      if (data.success) {
-        setUser(data.user);
-        alertService.toast(`เข้าสู่ระบบในฐานะ ${data.user.fullName}`, 'success');
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }, []);
-
   return {
     user,
     setUser,
     isLoading,
     loginWithGoogle,
     logout,
-    loginAsTestUser,
     refetch: fetchProfile,
   };
 }

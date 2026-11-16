@@ -12,21 +12,25 @@ import {
 import { Response, Request } from 'express';
 import { AuthService, AuthenticatedUser } from './auth.service';
 import { SessionAuthGuard, CurrentUser, Roles, RolesGuard } from './auth.guard';
+import { WebAuthnService } from './webauthn.service';
 
 @Controller('api/v1/auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly webAuthnService: WebAuthnService
+  ) {}
 
   /**
-   * Phase 2: Get Google OAuth 2.0 Login URL with PKCE
+   * Phase 1: Real Google OAuth 2.0 PKCE Auth URL
    */
   @Get('google/url')
-  getGoogleAuthUrl() {
+  async getGoogleAuthUrl() {
     return this.authService.generateGoogleAuthUrl();
   }
 
   /**
-   * Phase 2: Handle Google OAuth 2.0 Callback
+   * Phase 1: Real Google OAuth 2.0 Callback with strict domain and token verification
    */
   @Post('google/callback')
   @HttpCode(HttpStatus.OK)
@@ -40,41 +44,52 @@ export class AuthController {
     // Set secure HttpOnly cookie
     res.cookie('rycoop_session', sessionToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'test',
       sameSite: 'strict',
-      maxAge: 8 * 60 * 60 * 1000, // 8 hours
+      maxAge: 8 * 3600 * 1000, // 8 hours
       path: '/',
     });
 
     return {
       success: true,
-      user,
-      sessionToken, // Also return in body for testing/SPA integration
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        department: user.department,
+      },
     };
   }
 
   /**
-   * Get current authenticated user profile
+   * Current Authenticated Session Profile
    */
   @Get('me')
   @UseGuards(SessionAuthGuard)
   getCurrentUser(@CurrentUser() user: AuthenticatedUser) {
     return {
       authenticated: true,
-      user,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        department: user.department,
+      },
     };
   }
 
   /**
-   * Secure Logout
+   * Secure Logout & Session Revocation
    */
   @Post('logout')
   @UseGuards(SessionAuthGuard)
   @HttpCode(HttpStatus.OK)
-  logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const sessionToken = req.cookies?.['rycoop_session'];
     if (sessionToken) {
-      this.authService.revokeSession(sessionToken);
+      await this.authService.revokeSession(sessionToken);
     }
 
     res.clearCookie('rycoop_session', { path: '/' });
@@ -82,12 +97,34 @@ export class AuthController {
   }
 
   /**
-   * Phase 3: Create Transaction-Bound Challenge for Step-Up Approval
+   * Phase 2: WebAuthn Passkey Registration Options
+   */
+  @Get('webauthn/register-options')
+  @UseGuards(SessionAuthGuard)
+  async getWebAuthnRegisterOptions(@CurrentUser() user: AuthenticatedUser) {
+    return this.webAuthnService.generateRegistrationOptions(user);
+  }
+
+  /**
+   * Phase 2: WebAuthn Passkey Registration Verification
+   */
+  @Post('webauthn/register-verify')
+  @UseGuards(SessionAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async verifyWebAuthnRegistration(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() response: any
+  ) {
+    return this.webAuthnService.verifyRegistration(user.id, response);
+  }
+
+  /**
+   * Phase 2: Transaction-Bound Step-Up Challenge Generation for Checkers
    */
   @Post('stepup/challenge')
   @UseGuards(SessionAuthGuard, RolesGuard)
   @Roles('CHECKER')
-  createStepUpChallenge(
+  async createStepUpChallenge(
     @Body('referenceId') referenceId: string,
     @Body('amount') amount: number,
     @CurrentUser() checker: AuthenticatedUser
@@ -96,13 +133,13 @@ export class AuthController {
   }
 
   /**
-   * Phase 3: Verify Transaction-Bound Step-Up MFA (Passkey or TOTP)
+   * Phase 2: Transaction-Bound Step-Up MFA Verification
    */
   @Post('stepup/verify')
   @UseGuards(SessionAuthGuard, RolesGuard)
   @Roles('CHECKER')
   @HttpCode(HttpStatus.OK)
-  verifyStepUp(
+  async verifyStepUp(
     @Body('challengeId') challengeId: string,
     @Body('referenceId') referenceId: string,
     @Body('amount') amount: number,
@@ -119,36 +156,4 @@ export class AuthController {
       mfaType
     );
   }
-
-  /**
-   * Test-only login endpoint for test environment automation
-   */
-  @Post('test-login')
-  @HttpCode(HttpStatus.OK)
-  testLogin(
-    @Body('email') email: string,
-    @Res({ passthrough: true }) res: Response
-  ) {
-    const users = this.authService.getLocalUsers();
-    const user = users.find((u) => u.email.toLowerCase() === email?.toLowerCase());
-    if (!user) {
-      return { success: false, message: 'Test user not found' };
-    }
-
-    const sessionToken = this.authService.createSession(user);
-    res.cookie('rycoop_session', sessionToken, {
-      httpOnly: true,
-      secure: false, // Allow non-https in local unit tests
-      sameSite: 'strict',
-      maxAge: 8 * 60 * 60 * 1000,
-      path: '/',
-    });
-
-    return {
-      success: true,
-      sessionToken,
-      user,
-    };
-  }
 }
-

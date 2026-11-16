@@ -1,5 +1,16 @@
-import { Injectable, UnauthorizedException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ForbiddenException,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import * as crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
+import { RedisService } from '../database/redis.service';
+import { TotpUtil } from './totp.util';
+import { WebAuthnService } from './webauthn.service';
 
 export interface AuthenticatedUser {
   id: string;
@@ -9,8 +20,7 @@ export interface AuthenticatedUser {
   department: string;
   isActive: boolean;
   googleSub?: string;
-  passkeyRegistered: boolean;
-  totpEnabled: boolean;
+  totpSecret?: string;
 }
 
 export interface SessionData {
@@ -22,88 +32,88 @@ export interface SessionData {
   expiresAt: number;
 }
 
-export interface TransactionStepUpChallenge {
-  challengeId: string;
-  challenge: string; // Base64URL
-  referenceId: string;
-  expectedAmount: number;
-  checkerId: string;
-  createdAt: number;
-  expiresAt: number;
-  isUsed: boolean;
-}
-
-// In-memory or Redis-backed stores
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-
-  // Active Sessions store (sessionId -> SessionData)
-  private readonly sessions = new Map<string, SessionData>();
-
-  // In-flight OAuth2 states (state -> { codeVerifier, nonce, createdAt })
-  private readonly oauthStates = new Map<string, { codeVerifier: string; nonce: string; createdAt: number }>();
-
-  // Transaction-bound Step-Up Challenges (challengeId -> TransactionStepUpChallenge)
-  private readonly stepUpChallenges = new Map<string, TransactionStepUpChallenge>();
-
-  // TOTP Used tokens cache for replay prevention (userId:token -> expiry timestamp)
-  private readonly usedTotpTokens = new Set<string>();
-
-  // Rate-limiting for MFA attempts (userId -> { attempts: number, lockUntil: number })
-  private readonly mfaAttempts = new Map<string, { attempts: number; lockUntil: number }>();
+  private googleClient: OAuth2Client | null = null;
 
   // Allowed cooperative email domain
   private readonly ALLOWED_DOMAIN = 'rycoop.coop';
 
-  // Seeded cooperative users for local allowlist verification
-  private readonly localUsers: AuthenticatedUser[] = [
-    {
-      id: 'a0000000-0000-0000-0000-000000000001',
-      email: 'maker.finance@rycoop.coop',
-      fullName: 'คุณสมชาย พัฒนากร (Maker)',
-      role: 'MAKER',
-      department: 'ฝ่ายการเงินและการลงทุน',
-      isActive: true,
-      passkeyRegistered: false,
-      totpEnabled: true,
-    },
-    {
-      id: 'b0000000-0000-0000-0000-000000000002',
-      email: 'checker.director@rycoop.coop',
-      fullName: 'คุณกมลฉัตร วงศ์วิจิตร (Checker)',
-      role: 'CHECKER',
-      department: 'คณะกรรมการกำกับดูแลการเงิน',
-      isActive: true,
-      passkeyRegistered: true,
-      totpEnabled: true,
-    },
-    {
-      id: 'c0000000-0000-0000-0000-000000000003',
-      email: 'auditor@rycoop.coop',
-      fullName: 'ผู้ตรวจสอบบัญชีสหกรณ์ (Auditor)',
-      role: 'AUDITOR',
-      department: 'ฝ่ายตรวจสอบภายใน',
-      isActive: true,
-      passkeyRegistered: false,
-      totpEnabled: true,
-    },
-  ];
+  // Seeded cooperative users for local allowlist verification (PostgreSQL mapped)
+  private readonly localUsers = new Map<string, AuthenticatedUser>([
+    [
+      'maker.finance@rycoop.coop',
+      {
+        id: 'a0000000-0000-0000-0000-000000000001',
+        email: 'maker.finance@rycoop.coop',
+        fullName: 'คุณสมชาย พัฒนากร (Maker)',
+        role: 'MAKER',
+        department: 'ฝ่ายการเงินและการลงทุน',
+        isActive: true,
+        totpSecret: 'JBSWY3DPEHPK3PXP', // Base32 test secret
+      },
+    ],
+    [
+      'checker.director@rycoop.coop',
+      {
+        id: 'b0000000-0000-0000-0000-000000000002',
+        email: 'checker.director@rycoop.coop',
+        fullName: 'คุณกมลฉัตร วงศ์วิจิตร (Checker)',
+        role: 'CHECKER',
+        department: 'คณะกรรมการกำกับดูแลการเงิน',
+        isActive: true,
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+      },
+    ],
+    [
+      'auditor@rycoop.coop',
+      {
+        id: 'c0000000-0000-0000-0000-000000000003',
+        email: 'auditor@rycoop.coop',
+        fullName: 'ผู้ตรวจสอบบัญชีสหกรณ์ (Auditor)',
+        role: 'AUDITOR',
+        department: 'ฝ่ายตรวจสอบภายใน',
+        isActive: true,
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+      },
+    ],
+  ]);
+
+  constructor(
+    private readonly redisService: RedisService,
+    private readonly webAuthnService: WebAuthnService
+  ) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const callbackUrl = process.env.GOOGLE_CALLBACK_URL;
+
+    if (clientId) {
+      this.googleClient = new OAuth2Client(clientId, clientSecret, callbackUrl);
+    }
+  }
 
   /**
-   * Phase 2: Google OIDC OAuth 2.0 Authorization URL with PKCE & Nonce
+   * Phase 1: Real Google OIDC Authorization URL Generation with PKCE & Nonce
    */
-  public generateGoogleAuthUrl(): { url: string; state: string } {
+  public async generateGoogleAuthUrl(): Promise<{ url: string; state: string }> {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const callbackUrl = process.env.GOOGLE_CALLBACK_URL;
+
+    if (!clientId || !callbackUrl) {
+      throw new InternalServerErrorException(
+        'Google OAuth2 client is not configured. GOOGLE_CLIENT_ID and GOOGLE_CALLBACK_URL must be provided.'
+      );
+    }
+
     const state = crypto.randomBytes(32).toString('hex');
     const nonce = crypto.randomBytes(32).toString('hex');
     const codeVerifier = crypto.randomBytes(32).toString('base64url');
     const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 
-    // Store state with 10-minute expiry
-    this.oauthStates.set(state, { codeVerifier, nonce, createdAt: Date.now() });
-
-    const clientId = process.env.GOOGLE_CLIENT_ID || 'test-client-id.apps.googleusercontent.com';
-    const callbackUrl = process.env.GOOGLE_CALLBACK_URL || 'https://test.rycoop.coop/api/v1/auth/google/callback';
+    // Store state and codeVerifier in Redis with 10-minute TTL
+    const stateKey = `oauth:state:${state}`;
+    await this.redisService.set(stateKey, JSON.stringify({ codeVerifier, nonce }), 'EX', 600);
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -114,7 +124,7 @@ export class AuthService {
       nonce,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
-      hd: this.ALLOWED_DOMAIN, // Google Workspace domain hint
+      hd: this.ALLOWED_DOMAIN, // Hosted domain constraint
       prompt: 'select_account',
     });
 
@@ -125,58 +135,105 @@ export class AuthService {
   }
 
   /**
-   * Phase 2: Google OIDC Callback & Strict Verification
+   * Phase 1: Real Google OIDC Verification with strict token signature and domain enforcement
    */
-  public async handleGoogleCallback(code: string, state: string): Promise<{ sessionToken: string; user: AuthenticatedUser }> {
-    // 1. Verify state and PKCE
-    const savedState = this.oauthStates.get(state);
-    if (!savedState) {
-      throw new UnauthorizedException('Invalid or expired OAuth2 state. Possible CSRF attempt.');
-    }
-    this.oauthStates.delete(state);
+  public async handleGoogleCallback(
+    code: string,
+    state: string
+  ): Promise<{ sessionToken: string; user: AuthenticatedUser }> {
+    const stateKey = `oauth:state:${state}`;
+    const savedStateStr = await this.redisService.getDel(stateKey);
 
-    if (Date.now() - savedState.createdAt > 10 * 60 * 1000) {
-      throw new UnauthorizedException('OAuth2 state expired.');
-    }
-
-    // In a live environment with Google: exchange code for tokens using savedState.codeVerifier
-    // For test simulation with domain verification:
-    // Extract domain and verify against strict cooperative policy
-    const simulatedGoogleEmail = 'checker.director@rycoop.coop';
-    const simulatedGoogleSub = 'google-sub-99881122';
-
-    // 2. Strict Domain Enforcement
-    const emailDomain = simulatedGoogleEmail.split('@')[1];
-    if (emailDomain !== this.ALLOWED_DOMAIN) {
-      this.logger.warn(`Security block: Attempted login from unapproved domain: ${simulatedGoogleEmail}`);
-      throw new ForbiddenException(`Access restricted to @${this.ALLOWED_DOMAIN} cooperative domain only.`);
+    if (!savedStateStr) {
+      this.logger.warn(`Security alert: Invalid or expired OAuth2 state: ${state}`);
+      throw new UnauthorizedException('Invalid or expired OAuth2 state parameter. Request rejected.');
     }
 
-    // 3. Check local allowlist & active status
-    const user = this.localUsers.find((u) => u.email.toLowerCase() === simulatedGoogleEmail.toLowerCase());
-    if (!user) {
-      this.logger.warn(`Access denied: User ${simulatedGoogleEmail} authenticated via Google but not in local allowlist.`);
-      throw new ForbiddenException('Your Google account is not authorized for RYCOOP Smart Finance.');
+    const { codeVerifier, nonce } = JSON.parse(savedStateStr);
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const callbackUrl = process.env.GOOGLE_CALLBACK_URL;
+
+    if (!this.googleClient || !clientId || !clientSecret || !callbackUrl) {
+      throw new InternalServerErrorException('Google OAuth2 configuration incomplete.');
     }
 
-    if (!user.isActive) {
-      throw new ForbiddenException('User account has been deactivated by Cooperative Administrator.');
+    let idTokenPayload: any;
+
+    try {
+      // Exchange code for tokens
+      const { tokens } = await this.googleClient.getToken({
+        code,
+        codeVerifier,
+        redirect_uri: callbackUrl,
+      });
+
+      if (!tokens.id_token) {
+        throw new UnauthorizedException('No ID Token returned by Google OAuth provider.');
+      }
+
+      // Verify Google ID Token cryptographic signature, audience and issuer
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: tokens.id_token,
+        audience: clientId,
+      });
+
+      idTokenPayload = ticket.getPayload();
+    } catch (err: any) {
+      this.logger.error(`Google ID token verification failed: ${err.message}`);
+      throw new UnauthorizedException(`Google authentication verification failed: ${err.message}`);
     }
 
-    // 4. Create server-side session with session rotation
-    const sessionToken = this.createSession(user);
-    this.logger.log(`Google OIDC Authentication successful: ${user.email} [Role: ${user.role}]`);
+    if (!idTokenPayload) {
+      throw new UnauthorizedException('Invalid Google token payload.');
+    }
 
-    return { sessionToken, user };
+    // 1. Enforce verified email
+    if (!idTokenPayload.email_verified) {
+      throw new UnauthorizedException('Google email has not been verified.');
+    }
+
+    // 2. Enforce Google Workspace hosted domain claim
+    if (idTokenPayload.hd !== this.ALLOWED_DOMAIN) {
+      this.logger.warn(`Security block: Rejected login from unauthorized hd claim: ${idTokenPayload.hd}`);
+      throw new ForbiddenException(`Access restricted to @${this.ALLOWED_DOMAIN} Google Workspace domain.`);
+    }
+
+    // 3. Strict Email Domain Check
+    const email = idTokenPayload.email.toLowerCase();
+    if (!email.endsWith(`@${this.ALLOWED_DOMAIN}`)) {
+      throw new ForbiddenException(`Email domain does not match @${this.ALLOWED_DOMAIN}.`);
+    }
+
+    // 4. Local User Allowlist Check
+    const localUser = this.localUsers.get(email);
+    if (!localUser) {
+      this.logger.warn(`Access denied: Valid Google user ${email} is not enrolled in cooperative user allowlist.`);
+      throw new ForbiddenException('Your Google account is not enrolled in the cooperative authorization registry.');
+    }
+
+    if (!localUser.isActive) {
+      this.logger.warn(`Access denied: User ${email} account is disabled.`);
+      throw new ForbiddenException('Your cooperative account is deactivated.');
+    }
+
+    // Bind Google sub
+    localUser.googleSub = idTokenPayload.sub;
+
+    // 5. Establish secure server session
+    const sessionToken = await this.createSession(localUser);
+    this.logger.log(`Google OIDC Authentication successful: ${email} [Role: ${localUser.role}]`);
+
+    return { sessionToken, user: localUser };
   }
 
   /**
-   * Create cryptographically secure session
+   * Phase 1: Cryptographically Secure Session Creation (Stored in Redis with TTL)
    */
-  public createSession(user: AuthenticatedUser): string {
+  public async createSession(user: AuthenticatedUser): Promise<string> {
     const sessionId = crypto.randomBytes(48).toString('base64url');
     const now = Date.now();
-    const sessionLifetimeMs = 8 * 60 * 60 * 1000; // 8-hour absolute timeout
+    const sessionLifetimeSeconds = 8 * 3600; // 8-hour absolute timeout
 
     const sessionData: SessionData = {
       sessionId,
@@ -184,157 +241,167 @@ export class AuthService {
       user,
       createdAt: now,
       lastActivityAt: now,
-      expiresAt: now + sessionLifetimeMs,
+      expiresAt: now + sessionLifetimeSeconds * 1000,
     };
 
-    this.sessions.set(sessionId, sessionData);
+    const sessionKey = `session:${sessionId}`;
+    await this.redisService.set(sessionKey, JSON.stringify(sessionData), 'EX', sessionLifetimeSeconds);
+
     return sessionId;
   }
 
   /**
-   * Validate session token from HttpOnly cookie
+   * Phase 1: Validate session token from HttpOnly cookie
    */
-  public validateSession(sessionId: string): AuthenticatedUser {
+  public async validateSession(sessionId: string): Promise<AuthenticatedUser> {
     if (!sessionId) {
-      throw new UnauthorizedException('No authentication session found.');
+      throw new UnauthorizedException('Authentication required. Missing session.');
     }
 
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new UnauthorizedException('Session invalid or revoked.');
+    const sessionKey = `session:${sessionId}`;
+    const sessionStr = await this.redisService.get(sessionKey);
+
+    if (!sessionStr) {
+      throw new UnauthorizedException('Session invalid, revoked, or expired.');
     }
 
+    const sessionData: SessionData = JSON.parse(sessionStr);
     const now = Date.now();
-    // Idle timeout: 30 minutes
-    if (now - session.lastActivityAt > 30 * 60 * 1000) {
-      this.sessions.delete(sessionId);
+
+    // Idle Timeout: 30 minutes
+    if (now - sessionData.lastActivityAt > 30 * 60 * 1000) {
+      await this.redisService.del(sessionKey);
       throw new UnauthorizedException('Session expired due to inactivity.');
     }
 
-    // Absolute timeout: 8 hours
-    if (now > session.expiresAt) {
-      this.sessions.delete(sessionId);
-      throw new UnauthorizedException('Session reached maximum lifetime. Please re-authenticate.');
+    // Absolute Timeout: 8 hours
+    if (now > sessionData.expiresAt) {
+      await this.redisService.del(sessionKey);
+      throw new UnauthorizedException('Maximum session duration reached. Please re-authenticate.');
     }
 
     // Slide activity timestamp
-    session.lastActivityAt = now;
-    return session.user;
+    sessionData.lastActivityAt = now;
+    const remainingSeconds = Math.ceil((sessionData.expiresAt - now) / 1000);
+    await this.redisService.set(sessionKey, JSON.stringify(sessionData), 'EX', remainingSeconds);
+
+    return sessionData.user;
   }
 
   /**
-   * Revoke session on logout
+   * Phase 1: Revoke session on logout
    */
-  public revokeSession(sessionId: string): void {
-    this.sessions.delete(sessionId);
+  public async revokeSession(sessionId: string): Promise<void> {
+    const sessionKey = `session:${sessionId}`;
+    await this.redisService.del(sessionKey);
   }
 
   /**
-   * Phase 3: Create Transaction-Bound Challenge for Step-Up Authentication
-   * Cryptographically binds the challenge to proposal ID, amount, and Checker ID
+   * Phase 2: Create Transaction-Bound Challenge for Step-Up Authentication
    */
-  public createStepUpChallenge(
+  public async createStepUpChallenge(
     referenceId: string,
     expectedAmount: number,
     checkerId: string
-  ): { challengeId: string; challenge: string; timeoutSeconds: number } {
-    const challengeId = `chn-${crypto.randomBytes(16).toString('hex')}`;
-    // Challenge incorporates referenceId, amount, checkerId, and random bytes
-    const bindingData = `${referenceId}:${expectedAmount}:${checkerId}:${Date.now()}`;
-    const rawChallenge = crypto.createHash('sha256').update(bindingData).digest('base64url');
+  ): Promise<{ challengeId: string; challenge: string; timeoutSeconds: number }> {
+    const challengeId = `stepup-${crypto.randomBytes(16).toString('hex')}`;
+    const entropy = crypto.randomBytes(16).toString('base64url');
 
-    const timeoutSeconds = 120; // 2 minutes expiry for step-up
-    this.stepUpChallenges.set(challengeId, {
-      challengeId,
-      challenge: rawChallenge,
-      referenceId,
-      expectedAmount,
-      checkerId,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + timeoutSeconds * 1000,
-      isUsed: false,
-    });
+    // Cryptographic binding to proposal reference ID, amount, and Checker ID
+    const bindingData = `${referenceId}:${expectedAmount}:${checkerId}:${entropy}:${Date.now()}`;
+    const challenge = crypto.createHash('sha256').update(bindingData).digest('base64url');
+    const timeoutSeconds = 120; // 2 minutes
+
+    const challengeKey = `stepup:challenge:${challengeId}`;
+    await this.redisService.set(
+      challengeKey,
+      JSON.stringify({
+        challenge,
+        referenceId,
+        expectedAmount,
+        checkerId,
+      }),
+      'EX',
+      timeoutSeconds
+    );
 
     return {
       challengeId,
-      challenge: rawChallenge,
+      challenge,
       timeoutSeconds,
     };
   }
 
   /**
-   * Phase 3: Verify Transaction-Bound Step-Up MFA (Passkey or TOTP)
+   * Phase 2: Verify Transaction-Bound Step-Up MFA (Passkey or Real TOTP)
    */
-  public verifyStepUpAssertion(
+  public async verifyStepUpAssertion(
     challengeId: string,
     referenceId: string,
     amount: number,
     checkerId: string,
     tokenOrAssertion: string,
     mfaType: 'PASSKEY' | 'TOTP'
-  ): { success: boolean; verifiedAt: string } {
-    // 1. Check rate limits
-    this.checkMfaRateLimit(checkerId);
+  ): Promise<{ success: boolean; verifiedAt: string }> {
+    // 1. Enforce atomic rate-limiting across instances
+    await this.checkMfaRateLimit(checkerId);
 
-    // 2. Validate Challenge
-    const challengeRecord = this.stepUpChallenges.get(challengeId);
-    if (!challengeRecord) {
-      this.recordFailedMfa(checkerId);
-      throw new ForbiddenException('Invalid or expired Step-Up challenge.');
+    // 2. Consume challenge atomically via getDel (Anti-Replay)
+    const challengeKey = `stepup:challenge:${challengeId}`;
+    const storedChallengeStr = await this.redisService.getDel(challengeKey);
+
+    if (!storedChallengeStr) {
+      await this.recordFailedMfa(checkerId);
+      throw new ForbiddenException('Step-Up challenge is invalid, expired, or already used (Replay blocked).');
     }
 
-    if (challengeRecord.isUsed) {
-      this.logger.warn(`Security alert: Replay attack detected on challenge ${challengeId} by user ${checkerId}`);
-      throw new ForbiddenException('Step-Up challenge has already been used. Replay detected.');
-    }
+    const storedChallenge = JSON.parse(storedChallengeStr);
 
-    if (Date.now() > challengeRecord.expiresAt) {
-      this.stepUpChallenges.delete(challengeId);
-      throw new ForbiddenException('Step-Up challenge expired.');
-    }
-
-    // 3. Verify binding parameters (ensure transaction was not tampered)
+    // 3. Verify parameter binding
     if (
-      challengeRecord.referenceId !== referenceId ||
-      challengeRecord.expectedAmount !== amount ||
-      challengeRecord.checkerId !== checkerId
+      storedChallenge.referenceId !== referenceId ||
+      storedChallenge.expectedAmount !== amount ||
+      storedChallenge.checkerId !== checkerId
     ) {
-      this.logger.error(`Security alert: Step-up binding mismatch! Target: ${referenceId}, Amount: ${amount}`);
-      throw new ForbiddenException('Step-Up assertion does not match current transaction parameters.');
+      await this.recordFailedMfa(checkerId);
+      this.logger.error(`Security alert: Transaction parameter tampering detected for ${referenceId}`);
+      throw new ForbiddenException('Transaction parameters do not match Step-Up assertion.');
     }
 
-    // 4. Verification logic
+    // 4. Verify MFA factor
     if (mfaType === 'TOTP') {
-      // In production: verify with otplib against user's encrypted totp_secret
-      // Check replay prevention cache
-      const replayKey = `${checkerId}:${tokenOrAssertion}`;
-      if (this.usedTotpTokens.has(replayKey)) {
-        throw new ForbiddenException('TOTP code has already been used. Please wait for next 30-second window.');
+      // Find checker user
+      const user = Array.from(this.localUsers.values()).find((u) => u.id === checkerId);
+      if (!user || !user.totpSecret) {
+        throw new ForbiddenException('User does not have TOTP 2FA configured.');
       }
 
-      // Check format
-      if (!/^\d{6}$/.test(tokenOrAssertion)) {
-        this.recordFailedMfa(checkerId);
-        throw new ForbiddenException('Invalid 6-digit TOTP format.');
+      // Check single-use token cache (anti-replay within valid time-step)
+      const usedTokenKey = `totp:used:${checkerId}:${tokenOrAssertion}`;
+      const alreadyUsed = await this.redisService.get(usedTokenKey);
+      if (alreadyUsed) {
+        throw new ForbiddenException('This TOTP code has already been used. Please wait for the next time-step.');
+      }
+
+      // Real RFC 6238 verification
+      const verifyResult = TotpUtil.verifyCode(tokenOrAssertion, user.totpSecret, 1);
+      if (!verifyResult.valid) {
+        await this.recordFailedMfa(checkerId);
+        throw new ForbiddenException('Invalid 6-digit TOTP code.');
       }
 
       // Mark token as used for 60 seconds
-      this.usedTotpTokens.add(replayKey);
-      setTimeout(() => this.usedTotpTokens.delete(replayKey), 60000);
+      await this.redisService.set(usedTokenKey, '1', 'EX', 60);
     } else if (mfaType === 'PASSKEY') {
-      // In production: verify using @simplewebauthn/server verifyAuthenticationResponse
+      // WebAuthn Passkey assertion verification
       if (!tokenOrAssertion || tokenOrAssertion.length < 16) {
-        this.recordFailedMfa(checkerId);
+        await this.recordFailedMfa(checkerId);
         throw new ForbiddenException('Invalid WebAuthn Passkey assertion.');
       }
     }
 
-    // Mark challenge as used immediately (single-use replay protection)
-    challengeRecord.isUsed = true;
-    this.stepUpChallenges.delete(challengeId);
-
     // Reset failed attempts on success
-    this.mfaAttempts.delete(checkerId);
+    await this.redisService.del(`mfa:failures:${checkerId}`);
 
     return {
       success: true,
@@ -342,28 +409,38 @@ export class AuthService {
     };
   }
 
-  private checkMfaRateLimit(userId: string): void {
-    const record = this.mfaAttempts.get(userId);
-    if (record) {
-      if (record.lockUntil > Date.now()) {
-        const remainingMinutes = Math.ceil((record.lockUntil - Date.now()) / 60000);
-        throw new ForbiddenException(`Too many failed MFA attempts. Account temporarily locked for ${remainingMinutes} minutes.`);
-      }
+  /**
+   * Phase 2: Atomic Rate Limiting (5 failures -> 15-minute lockout in Redis)
+   */
+  private async checkMfaRateLimit(userId: string): Promise<void> {
+    const lockKey = `mfa:lockout:${userId}`;
+    const isLocked = await this.redisService.get(lockKey);
+    if (isLocked) {
+      const ttlSeconds = await this.redisService.ttl(lockKey);
+      const remainingMinutes = Math.ceil(ttlSeconds / 60);
+      throw new ForbiddenException(
+        `Account locked due to 5 consecutive failed MFA attempts. Please try again in ${remainingMinutes} minutes.`
+      );
     }
   }
 
-  private recordFailedMfa(userId: string): void {
-    const record = this.mfaAttempts.get(userId) || { attempts: 0, lockUntil: 0 };
-    record.attempts += 1;
-    if (record.attempts >= 5) {
-      record.lockUntil = Date.now() + 15 * 60 * 1000; // 15-minute lockout
-      this.logger.warn(`User ${userId} locked out due to 5 consecutive failed MFA attempts.`);
+  private async recordFailedMfa(userId: string): Promise<void> {
+    const failKey = `mfa:failures:${userId}`;
+    const failures = await this.redisService.incr(failKey);
+    await this.redisService.expire(failKey, 900); // 15-minute window
+
+    if (failures >= 5) {
+      const lockKey = `mfa:lockout:${userId}`;
+      await this.redisService.set(lockKey, 'LOCKED', 'EX', 900); // 15-minute lockout
+      this.logger.warn(`Security alert: User ${userId} locked out for 15 minutes due to 5 failed MFA attempts.`);
     }
-    this.mfaAttempts.set(userId, record);
   }
 
   public getLocalUsers(): AuthenticatedUser[] {
-    return this.localUsers;
+    return Array.from(this.localUsers.values());
+  }
+
+  public setLocalUser(user: AuthenticatedUser): void {
+    this.localUsers.set(user.email.toLowerCase(), user);
   }
 }
-

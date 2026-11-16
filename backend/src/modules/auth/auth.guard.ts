@@ -24,13 +24,13 @@ export const CurrentUser = createParamDecorator(
 export class SessionAuthGuard implements CanActivate {
   constructor(private readonly authService: AuthService) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
 
-    // 1. Check HttpOnly cookie first (primary secure transport)
+    // 1. HttpOnly cookie is the primary secure transport
     let sessionToken = request.cookies?.['rycoop_session'];
 
-    // 2. Fallback to Authorization: Bearer header for API integration tests
+    // 2. Fallback to Authorization: Bearer header for automated integration tests
     if (!sessionToken && request.headers.authorization) {
       const parts = request.headers.authorization.split(' ');
       if (parts.length === 2 && parts[0] === 'Bearer') {
@@ -42,8 +42,8 @@ export class SessionAuthGuard implements CanActivate {
       throw new UnauthorizedException('Authentication required. Missing session cookie or bearer token.');
     }
 
-    // 3. Validate session against AuthService
-    const user = this.authService.validateSession(sessionToken);
+    // 3. Validate session against AuthService (Redis-backed)
+    const user = await this.authService.validateSession(sessionToken);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Session is invalid or user account has been disabled.');
     }
@@ -75,7 +75,7 @@ export class RolesGuard implements CanActivate {
       throw new UnauthorizedException('User not authenticated.');
     }
 
-    // Admin does NOT automatically inherit financial Maker or Checker authority (Principle of Least Privilege)
+    // Admin does NOT automatically inherit financial Maker or Checker authority (Least Privilege)
     const hasRole = requiredRoles.includes(user.role);
     if (!hasRole) {
       throw new ForbiddenException(
@@ -86,4 +86,3 @@ export class RolesGuard implements CanActivate {
     return true;
   }
 }
-

@@ -27,7 +27,6 @@ import {
   Server,
   LogIn,
   LogOut,
-  UserCheck,
 } from 'lucide-react';
 
 const INITIAL_DEMO_NOTIFICATIONS: CoopNotification[] = [
@@ -68,7 +67,7 @@ const INITIAL_DEMO_NOTIFICATIONS: CoopNotification[] = [
 
 export default function SmartFinanceDashboard() {
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const { user, loginWithGoogle, logout, loginAsTestUser } = useAuth();
+  const { user, loginWithGoogle, logout } = useAuth();
   const {
     success,
     error,
@@ -266,46 +265,6 @@ export default function SmartFinanceDashboard() {
           </div>
         </div>
       </header>
-
-      {/* Role Switcher Toolbar for Test Environment Automation */}
-      <div className="bg-slate-900/90 border-b border-slate-800 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-slate-300">
-          <UserCheck className="w-4 h-4 text-cyan-400" />
-          <span className="font-semibold text-slate-200">สลับบทบาททดสอบ (Test Role Switcher):</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => loginAsTestUser('maker.finance@rycoop.coop')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
-              user?.role === 'MAKER'
-                ? 'bg-cyan-500 text-slate-950 font-bold'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            1. Maker (สมชาย พัฒนากร)
-          </button>
-          <button
-            onClick={() => loginAsTestUser('checker.director@rycoop.coop')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
-              user?.role === 'CHECKER'
-                ? 'bg-amber-400 text-slate-950 font-bold'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            2. Checker (กมลฉัตร วงศ์วิจิตร)
-          </button>
-          <button
-            onClick={() => loginAsTestUser('auditor@rycoop.coop')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
-              user?.role === 'AUDITOR'
-                ? 'bg-purple-400 text-slate-950 font-bold'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            3. Auditor (ผู้ตรวจสอบบัญชี)
-          </button>
-        </div>
-      </div>
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 flex-1">
