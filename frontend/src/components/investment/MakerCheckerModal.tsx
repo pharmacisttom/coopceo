@@ -2,14 +2,16 @@
 
 import React, { useState } from 'react';
 import { useAlert } from '../../hooks/useAlert';
-import { ShieldCheck, ArrowRight, DollarSign, FileText, Building2 } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
+import { ShieldCheck, Building2, AlertCircle } from 'lucide-react';
 
 interface InvestmentFormProps {
   onSuccess?: () => void;
 }
 
 export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) => {
-  const { criticalTransactionConfirm, success, error, loading, closeLoading } = useAlert();
+  const { criticalTransactionConfirm, success, error, warning } = useAlert();
+  const { user } = useAuth();
 
   const [formData, setFormData] = useState({
     investmentType: 'GOVERNMENT_BOND',
@@ -23,6 +25,11 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (user && user.role !== 'MAKER') {
+      warning('สิทธิ์ไม่ถูกต้อง', `คุณกำลังเข้าสู่ระบบด้วยบทบาท [${user.role}] เฉพาะผู้มีบทบาท [MAKER] เท่านั้นที่สามารถสร้างคำขอลงทุนได้`);
+      return;
+    }
+
     const refId = `INV-${Date.now().toString().slice(-6)}`;
 
     // Rule 8 & 9: SweetAlert2 Critical Confirmation + Non-dismissible during save
@@ -33,23 +40,23 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
       currency: 'THB',
       confirmButtonText: 'ยืนยันและส่งให้ Checker ตรวจสอบ',
       onVerifyBackend: async () => {
-        // Simulated Backend Maker Submission API call with Transactional Outbox
+        // Send payload WITHOUT client-supplied maker ID. Identity is strictly derived from session cookie
         const res = await fetch('/api/v1/investments/maker-submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({
             ...formData,
             referenceId: refId,
-            makerUserId: 'user-finance-maker-01',
           }),
-        }).catch(() => null);
+        });
 
-        // Allow graceful simulated response for demo
-        return {
-          success: true,
-          referenceId: refId,
-          status: 'PENDING_CHECKER_APPROVAL',
-        };
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || 'บันทึกคำขอล้มเหลว');
+        }
+
+        return await res.json();
       },
     });
 
@@ -74,7 +81,7 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
               สร้างคำขอลงทุนทางการเงิน (Maker Role)
             </h3>
             <p className="text-xs text-slate-400">
-              ระบบ Maker-Checker: รายการนี้จะต้องได้รับการอนุมัติแบบ Step-up Auth จาก Checker
+              ผู้สร้างคำขอ: <span className="text-cyan-400 font-medium">{user ? user.fullName : 'Maker (รอเข้าสู่ระบบ)'}</span>
             </p>
           </div>
         </div>
@@ -167,23 +174,11 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
           />
         </div>
 
-        <div className="pt-2 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            className="px-4 py-2 text-xs text-slate-400 hover:text-slate-200 font-medium"
-            onClick={() => {
-              setFormData({
-                investmentType: 'GOVERNMENT_BOND',
-                issuerName: 'พันธบัตรรัฐบาลเพื่อการบริหารหนี้ รุ่น LB28DA',
-                amount: 15000000,
-                expectedYield: 3.25,
-                tenorMonths: 36,
-                purpose: 'บริหารสภาพคล่องและเพิ่มผลตอบแทนสินทรัพย์สหกรณ์',
-              });
-            }}
-          >
-            ล้างข้อมูล
-          </button>
+        <div className="pt-2 flex items-center justify-between">
+          <div className="text-[11px] text-amber-400 flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>Maker Identity ได้รับการผูกกับ Session ผู้ใช้จริง ไม่สามารถปลอมแปลงได้</span>
+          </div>
 
           <button
             type="submit"
@@ -199,4 +194,3 @@ export const MakerCheckerModal: React.FC<InvestmentFormProps> = ({ onSuccess }) 
 };
 
 export default MakerCheckerModal;
-

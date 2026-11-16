@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useAlert } from '../hooks/useAlert';
 import { useSSE, CoopNotification } from '../hooks/useSSE';
+import { useAuth } from '../hooks/useAuth';
 import NotificationCenter from '../components/notification/NotificationCenter';
 import MakerCheckerModal from '../components/investment/MakerCheckerModal';
 import InvestmentApprovalTable from '../components/investment/InvestmentApprovalTable';
@@ -24,6 +25,9 @@ import {
   Sun,
   Database,
   Server,
+  LogIn,
+  LogOut,
+  UserCheck,
 } from 'lucide-react';
 
 const INITIAL_DEMO_NOTIFICATIONS: CoopNotification[] = [
@@ -64,20 +68,17 @@ const INITIAL_DEMO_NOTIFICATIONS: CoopNotification[] = [
 
 export default function SmartFinanceDashboard() {
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const { user, loginWithGoogle, logout, loginAsTestUser } = useAuth();
   const {
     success,
     error,
     warning,
     info,
     confirm,
-    criticalTransactionConfirm,
-    stepUp2FA,
-    loading,
-    closeLoading,
     toast,
   } = useAlert();
 
-  // SSE client hook with state
+  // Hardened SSE hook
   const {
     notifications,
     setNotifications,
@@ -88,7 +89,6 @@ export default function SmartFinanceDashboard() {
     markAllAsRead,
   } = useSSE();
 
-  // Pre-seed demo notifications if empty
   React.useEffect(() => {
     if (notifications.length === 0) {
       setNotifications(INITIAL_DEMO_NOTIFICATIONS);
@@ -102,7 +102,6 @@ export default function SmartFinanceDashboard() {
     }
   };
 
-  // Simulation Triggers for the 4 core business notification events
   const triggerSimulation = (type: 'BANK' | 'BOND' | 'LIQUIDITY' | 'INVESTMENT') => {
     const timestamp = new Date().toISOString();
     const eventId = `evt-${Date.now()}`;
@@ -154,7 +153,7 @@ export default function SmartFinanceDashboard() {
           id: `notif-${Date.now()}`,
           eventId,
           title: 'รายการลงทุนใหม่รอการอนุมัติ (Checker Queue)',
-          message: 'Maker ได้ส่งรายการซื้อพันธบัตร ธปท. วงเงิน 15,000,000 บาท รหัส INV-99120 รอการตรวจสอบ',
+          message: 'Maker ได้ส่งรายการซื้อพันธบัตร ธปท. วงเงิน 15,000,000 บาท รอการตรวจสอบ',
           category: 'INVESTMENT_PENDING_APPROVAL',
           priority: 'WARNING',
           status: 'UNREAD',
@@ -166,7 +165,6 @@ export default function SmartFinanceDashboard() {
 
     setNotifications((prev) => [newEvent, ...prev]);
 
-    // SweetAlert2 notification response
     if (newEvent.priority === 'CRITICAL') {
       toast(`[สำคัญเร่งด่วน] ${newEvent.title}`, 'error', 'top-end', 5000);
     } else if (newEvent.priority === 'WARNING') {
@@ -194,11 +192,11 @@ export default function SmartFinanceDashboard() {
                   RYCOOP <span className="text-cyan-400">Smart Finance</span>
                 </h1>
                 <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                  TEST ENV
+                  TEST RC01
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                ระบบจัดการแจ้งเตือนธุรกรรม & Maker-Checker Dual Control
+                ระบบกำกับดูแลการเงิน & Maker-Checker Dual Control
               </p>
             </div>
           </div>
@@ -211,7 +209,7 @@ export default function SmartFinanceDashboard() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              <span>SSE Real-time Active</span>
+              <span>SSE Hardened</span>
             </div>
 
             {/* Dark/Light toggle */}
@@ -236,23 +234,82 @@ export default function SmartFinanceDashboard() {
               }}
             />
 
-            {/* User Profile */}
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-800 text-xs">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-amber-500 flex items-center justify-center font-bold text-slate-950">
-                MK
+            {/* User Session Profile or Login */}
+            {user ? (
+              <div className="flex items-center gap-3 pl-2 border-l border-slate-800 text-xs">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-600 to-amber-500 flex items-center justify-center font-bold text-slate-950">
+                  {user.role.substring(0, 2)}
+                </div>
+                <div className="hidden md:block text-left">
+                  <div className="font-semibold text-white leading-none">{user.fullName}</div>
+                  <div className="text-[10px] text-cyan-400 font-mono mt-0.5">Role: {user.role}</div>
+                </div>
+                <button
+                  onClick={logout}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                  title="ออกจากระบบ"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
-              <div className="hidden md:block text-left">
-                <div className="font-semibold text-white leading-none">เจ้าหน้าที่การเงิน</div>
-                <div className="text-[10px] text-cyan-400 font-mono mt-0.5">Role: Maker / Checker</div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loginWithGoogle}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-200 font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <LogIn className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Google Login (@rycoop.coop)</span>
+                </button>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </header>
 
+      {/* Role Switcher Toolbar for Test Environment Automation */}
+      <div className="bg-slate-900/90 border-b border-slate-800 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-slate-300">
+          <UserCheck className="w-4 h-4 text-cyan-400" />
+          <span className="font-semibold text-slate-200">สลับบทบาททดสอบ (Test Role Switcher):</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => loginAsTestUser('maker.finance@rycoop.coop')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
+              user?.role === 'MAKER'
+                ? 'bg-cyan-500 text-slate-950 font-bold'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            1. Maker (สมชาย พัฒนากร)
+          </button>
+          <button
+            onClick={() => loginAsTestUser('checker.director@rycoop.coop')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
+              user?.role === 'CHECKER'
+                ? 'bg-amber-400 text-slate-950 font-bold'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            2. Checker (กมลฉัตร วงศ์วิจิตร)
+          </button>
+          <button
+            onClick={() => loginAsTestUser('auditor@rycoop.coop')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
+              user?.role === 'AUDITOR'
+                ? 'bg-purple-400 text-slate-950 font-bold'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            3. Auditor (ผู้ตรวจสอบบัญชี)
+          </button>
+        </div>
+      </div>
+
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 flex-1">
-        {/* Banner: Test Environment & Compliance Guarantee */}
+        {/* Banner: Security Hardening RC01 Status */}
         <div className="rounded-2xl bg-gradient-to-r from-slate-900 via-blue-950/40 to-slate-900 border border-cyan-500/30 p-5 shadow-2xl relative overflow-hidden">
           <div className="absolute right-0 top-0 -mt-10 -mr-10 w-48 h-48 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -262,24 +319,22 @@ export default function SmartFinanceDashboard() {
                   <Lock className="w-4 h-4" />
                 </span>
                 <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-                  RYCOOP Enterprise Financial Standard & Security Rules
+                  RYCOOP Security Hardened Release Candidate 01 (RC01)
                 </h2>
               </div>
               <p className="text-xs text-slate-300 mt-1 max-w-3xl leading-relaxed">
-                ระบบถูกออกแบบตามสถาปัตยกรรมความปลอดภัยระดับสหกรณ์ออมทรัพย์: แยกสภาพแวดล้อม TEST ชัดเจน,
-                ใช้ SweetAlert2 Centralized Theme ป้องกัน Modal Clashes, ระบบคิว Outbox/BullMQ สำหรับแจ้งเตือนแบบเรียลไทม์,
-                และบังคับใช้ <strong>Maker-Checker Dual Control พร้อม Step-Up 2FA</strong>
+                แก้ไขช่องโหว่ความปลอดภัยระดับวิกฤต: บังคับใช้ Server-Side Session สำหรับ Maker-Checker, ป้องกัน Race Condition ด้วย Row-Level Lock, บังคับใช้ Step-Up Authentication ที่ผูกกับพารามิเตอร์ธุรกรรม, และจำกัดสิทธิ์ SSE แบบ Default-Deny
               </p>
             </div>
             <div className="flex flex-wrap gap-2 text-[11px] font-mono shrink-0">
               <span className="px-2.5 py-1 rounded bg-slate-900/80 border border-slate-700 text-emerald-400">
-                ✓ Rule 8: Non-Dismissible Critical
+                ✓ Maker!=Checker Enforced
               </span>
               <span className="px-2.5 py-1 rounded bg-slate-900/80 border border-slate-700 text-amber-400">
-                ✓ Rule 9: Backend Dual-Approval
+                ✓ Step-Up Challenge Bound
               </span>
               <span className="px-2.5 py-1 rounded bg-slate-900/80 border border-slate-700 text-cyan-400">
-                ✓ Rule 10: Resilient Outbox
+                ✓ Safe Port Mapping
               </span>
             </div>
           </div>
@@ -303,7 +358,6 @@ export default function SmartFinanceDashboard() {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-5">
-            {/* Success */}
             <button
               onClick={() => success('บันทึกข้อมูลเรียบร้อย', 'ข้อมูลสมาชิกล่าสุดถูกบันทึกลงระบบหลักแล้ว')}
               className="p-3 rounded-xl bg-slate-950/70 border border-emerald-500/30 hover:border-emerald-400 hover:bg-emerald-950/20 text-emerald-400 flex flex-col items-center justify-center gap-2 text-xs font-medium transition-all group"
@@ -312,7 +366,6 @@ export default function SmartFinanceDashboard() {
               <span>Success Alert</span>
             </button>
 
-            {/* Error */}
             <button
               onClick={() => error('เกิดข้อผิดพลาดในการเชื่อมต่อ', 'ไม่สามารถเชื่อมต่อฐานข้อมูลหลักชั่วคราว รหัส ERR-5002')}
               className="p-3 rounded-xl bg-slate-950/70 border border-rose-500/30 hover:border-rose-400 hover:bg-rose-950/20 text-rose-400 flex flex-col items-center justify-center gap-2 text-xs font-medium transition-all group"
@@ -321,7 +374,6 @@ export default function SmartFinanceDashboard() {
               <span>Error Alert</span>
             </button>
 
-            {/* Warning */}
             <button
               onClick={() => warning('เตือนความเสี่ยงสภาพคล่อง', 'อัตราส่วนเงินสดสำรองกำลังเข้าใกล้ระดับขั้นต่ำตามเกณฑ์กำกับ')}
               className="p-3 rounded-xl bg-slate-950/70 border border-amber-500/30 hover:border-amber-400 hover:bg-amber-950/20 text-amber-400 flex flex-col items-center justify-center gap-2 text-xs font-medium transition-all group"
@@ -330,7 +382,6 @@ export default function SmartFinanceDashboard() {
               <span>Warning Alert</span>
             </button>
 
-            {/* Info */}
             <button
               onClick={() => info('รอบปิดบัญชีสิ้นปี 2026', 'ระบบจะประมวลผลเงินปันผลสมาชิกในวันที่ 25 ธันวาคม')}
               className="p-3 rounded-xl bg-slate-950/70 border border-cyan-500/30 hover:border-cyan-400 hover:bg-cyan-950/20 text-cyan-400 flex flex-col items-center justify-center gap-2 text-xs font-medium transition-all group"
@@ -339,7 +390,6 @@ export default function SmartFinanceDashboard() {
               <span>Information Alert</span>
             </button>
 
-            {/* Confirmation */}
             <button
               onClick={async () => {
                 const res = await confirm('ยืนยันการปิดงบประจำวัน', 'คุณต้องการเริ่มกระบวนการคำนวณดอกเบี้ยสะสมหรือไม่?');
@@ -351,7 +401,6 @@ export default function SmartFinanceDashboard() {
               <span>Confirm Alert</span>
             </button>
 
-            {/* Toast Notification */}
             <button
               onClick={() => toast('อัปเดตข้อมูลแบบเรียลไทม์แล้ว', 'success', 'top-end', 3000)}
               className="p-3 rounded-xl bg-slate-950/70 border border-purple-500/30 hover:border-purple-400 hover:bg-purple-950/20 text-purple-400 flex flex-col items-center justify-center gap-2 text-xs font-medium transition-all group"
@@ -362,7 +411,7 @@ export default function SmartFinanceDashboard() {
           </div>
         </section>
 
-        {/* Section 2: Real-time Event Simulation Triggers (4 Core Events) */}
+        {/* Section 2: Real-time Event Simulation Triggers */}
         <section className="bg-slate-900/70 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-md">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800">
             <div>
@@ -380,7 +429,6 @@ export default function SmartFinanceDashboard() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
-            {/* 1. New Bank Data */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-cyan-500/50 transition-all flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-cyan-400 mb-2">
@@ -399,7 +447,6 @@ export default function SmartFinanceDashboard() {
               </button>
             </div>
 
-            {/* 2. Bond Maturity */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-amber-500/50 transition-all flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-amber-400 mb-2">
@@ -418,7 +465,6 @@ export default function SmartFinanceDashboard() {
               </button>
             </div>
 
-            {/* 3. Low Liquidity */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-rose-500/50 transition-all flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-rose-400 mb-2">
@@ -437,7 +483,6 @@ export default function SmartFinanceDashboard() {
               </button>
             </div>
 
-            {/* 4. Investment Pending Approval */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-amber-400/50 transition-all flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-amber-400 mb-2">
@@ -466,17 +511,15 @@ export default function SmartFinanceDashboard() {
               กระบวนการควบคุมแบบคู่ (Maker–Checker Dual Authorization Workflow)
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              เป็นไปตามเกณฑ์ข้อ 8 (ห้ามปิด Modal สำคัญระหว่างส่งคำขอ), ข้อ 9 (Frontend Confirmation ไม่ถือเป็นการอนุมัติ), และข้อ 8 Infrastructure (Step-Up 2FA)
+              ป้องกันการทุจริตภายในสหกรณ์: บังคับใช้การยืนยันตัวตนสองชั้น, ห้าม Maker อนุมัติรายการตนเอง, และยืนยันตัวตนด้วย Step-Up Passkey
             </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left: Maker Form */}
             <div className="lg:col-span-5">
               <MakerCheckerModal />
             </div>
 
-            {/* Right: Checker Approval Queue */}
             <div className="lg:col-span-7">
               <InvestmentApprovalTable />
             </div>
@@ -491,7 +534,7 @@ export default function SmartFinanceDashboard() {
               <span>สถานะสถาปัตยกรรมระบบและความปลอดภัย (Infrastructure & Safety Matrix)</span>
             </div>
             <span className="font-mono text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/40">
-              Status: TEST Verified
+              Status: Hardened TEST RC01
             </span>
           </div>
 
@@ -502,27 +545,27 @@ export default function SmartFinanceDashboard() {
                 <span>PostgreSQL & Outbox Queue</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                จัดเก็บ Notification History และ Audit Logs พร้อมระบบ Transactional Outbox + BullMQ แยกการแจ้งเตือนจากธุรกรรม
+                จัดเก็บประวัติและ Audit Logs พร้อมระบบ Row-level Lock ป้องกัน Race Condition ในรายการอนุมัติ
               </p>
             </div>
 
             <div className="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
               <div className="font-semibold text-slate-200 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-amber-400" />
-                <span>Auth & Step-Up 2FA</span>
+                <span>Google OIDC & Passkey</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                รองรับ Google OIDC + WebAuthn/Passkey และ TOTP Authenticator สำหรับการยืนยันตัวตนระดับสูง
+                จำกัดเฉพาะโดเมน @rycoop.coop พร้อมการตรวจสอบลายเซ็น Step-Up MFA ที่ผูกกับพารามิเตอร์ธุรกรรม
               </p>
             </div>
 
             <div className="space-y-1.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
               <div className="font-semibold text-slate-200 flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-rose-400" />
-                <span>Production Protection</span>
+                <span>Zero Production Impact</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                แยก Container, Secrets, Database จาก RYCOOPWEB เดิม 100% พร้อม Docker Resource Limits และ Health Checks
+                แยกพอร์ต 8080/8443, Docker Network และ Database จากระบบเดิม 100% ไม่กระทบ Production ของสหกรณ์
               </p>
             </div>
           </div>
@@ -531,9 +574,8 @@ export default function SmartFinanceDashboard() {
 
       {/* Footer */}
       <footer className="border-t border-slate-800/80 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        RYCOOP Smart Finance Enterprise • UI Alert, Real-time Notification & Maker-Checker System
+        RYCOOP Smart Finance Enterprise • Security Hardening RC01 Release Candidate
       </footer>
     </div>
   );
 }
-
