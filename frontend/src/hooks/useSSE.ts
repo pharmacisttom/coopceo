@@ -37,12 +37,11 @@ export function useSSE({
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [unreadCount, setUnreadCount] = useState<number>(0);
 
-  // LRU / Set for deduplication (tracks eventIds seen in last 10 minutes)
   const seenEventIds = useRef<Set<string>>(new Set());
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef<number>(0);
-  const maxRetries = 10;
+  const maxRetries = 8;
   const isUnmountedRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -52,7 +51,6 @@ export function useSSE({
     };
   }, []);
 
-  // Recalculate unread count
   useEffect(() => {
     const unread = notifications.filter((n) => n.status === 'UNREAD').length;
     setUnreadCount(unread);
@@ -110,6 +108,11 @@ export function useSSE({
     }
   }, []);
 
+  // Safe client-side financial text sanitizer before showing toast/notification
+  const sanitizeNotificationText = (text: string): string => {
+    return text.replace(/(\d{3})-(\d)-(\d{5})-(\d)/g, 'xxx-x-xx$3-$4');
+  };
+
   const connect = useCallback(() => {
     if (!enabled || typeof window === 'undefined' || isUnmountedRef.current) return;
 
@@ -118,7 +121,7 @@ export function useSSE({
       eventSourceRef.current = null;
     }
 
-    // Phase 4: Never append token to query string! Rely on HttpOnly session cookie
+    // Rely exclusively on same-origin session cookie
     const es = new EventSource(url, { withCredentials: true });
     eventSourceRef.current = es;
 
@@ -133,27 +136,28 @@ export function useSSE({
       try {
         const payload: CoopNotification = JSON.parse(event.data);
 
-        // Deduplication Guard: Ignore if we have seen this eventId recently
+        // Deduplication Guard: Ignore if seen in last 10 minutes
         if (seenEventIds.current.has(payload.eventId)) {
           return;
         }
 
         seenEventIds.current.add(payload.eventId);
-        if (seenEventIds.current.size > 1000) {
+        if (seenEventIds.current.size > 500) {
           const firstKey = seenEventIds.current.values().next().value;
           if (firstKey) seenEventIds.current.delete(firstKey);
         }
 
-        // Bound in-memory state: keep at most 500 notifications
-        setNotifications((prev) => [payload, ...prev].slice(0, 500));
+        // Bounded client memory: maximum 100 notifications
+        setNotifications((prev) => [payload, ...prev].slice(0, 100));
 
-        // Priority Toast
+        // Toast alert with sanitized text
+        const safeTitle = sanitizeNotificationText(payload.title);
         if (payload.priority === 'CRITICAL') {
-          alertService.toast(`[สำคัญเร่งด่วน] ${payload.title}`, 'error', 'top-end', 6000);
+          alertService.toast(`[สำคัญเร่งด่วน] ${safeTitle}`, 'error', 'top-end', 6000);
         } else if (payload.priority === 'WARNING') {
-          alertService.toast(`[เตือน] ${payload.title}`, 'warning', 'top-end', 4500);
+          alertService.toast(`[เตือน] ${safeTitle}`, 'warning', 'top-end', 4500);
         } else {
-          alertService.toast(payload.title, 'info', 'bottom-end', 3000);
+          alertService.toast(safeTitle, 'info', 'bottom-end', 3000);
         }
 
         onNewNotification?.(payload);
@@ -163,23 +167,21 @@ export function useSSE({
     });
 
     es.addEventListener('heartbeat', () => {
-      // Keep-alive heartbeat from NestJS server
+      // Keep-alive heartbeat
     });
 
-    es.onerror = (err) => {
+    es.onerror = () => {
       if (isUnmountedRef.current) return;
       setIsConnected(false);
       es.close();
       eventSourceRef.current = null;
 
-      // Stop reconnecting if max retries exceeded
+      // Stop reconnecting if max retries exceeded or unauthorized
       if (retryCountRef.current >= maxRetries) {
-        console.warn('[SSE] Max connection retries reached. Stopping reconnection.');
         onAuthError?.();
         return;
       }
 
-      // Exponential backoff with jitter
       const baseDelay = Math.min(1000 * Math.pow(2, retryCountRef.current), 15000);
       const jitter = Math.random() * 500;
       const retryDelay = baseDelay + jitter;

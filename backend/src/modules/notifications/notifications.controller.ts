@@ -7,8 +7,8 @@ import {
   Body,
   Sse,
   UseGuards,
-  Req,
   ForbiddenException,
+  InternalServerErrorException,
   Headers,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
@@ -21,11 +21,8 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   /**
-   * Phase 4: Hardened SSE Endpoint
-   * - Strictly requires SessionAuthGuard (HttpOnly session cookie)
-   * - No bearer token in URL query params
-   * - Role and User ID derived solely from verified session context
-   * - Default Deny filtering
+   * Phase 4: Secure Real-time SSE Stream
+   * Requires authenticated session; Role and User ID derived solely from verified session context
    */
   @Sse('stream')
   @UseGuards(SessionAuthGuard)
@@ -65,7 +62,7 @@ export class NotificationsController {
   }
 
   /**
-   * Mark all unread notifications as read (Authenticated)
+   * Mark all unread notifications as read
    */
   @Post('mark-all-read')
   @UseGuards(SessionAuthGuard)
@@ -73,22 +70,29 @@ export class NotificationsController {
     return {
       success: true,
       userId: user.id,
-      message: 'All unread notifications marked as read',
+      message: 'All unread notifications marked as read.',
       timestamp: new Date().toISOString(),
     };
   }
 
   /**
-   * Protected Internal Notification Dispatch Endpoint
-   * Only callable with internal service secret or loopback
+   * Phase 4: Protected Internal Notification Publisher Endpoint
+   * Enforces non-predictable internal service key (Fail-closed if not configured)
    */
   @Post('emit')
   async emitNotification(
     @Body() payload: NotificationPayload,
     @Headers('x-internal-service-key') serviceKey?: string
   ) {
-    const internalSecret = process.env.INTERNAL_SERVICE_SECRET || 'rycoop-internal-worker-secret-key-99';
-    if (serviceKey !== internalSecret) {
+    const internalSecret = process.env.INTERNAL_SERVICE_SECRET;
+
+    if (!internalSecret || internalSecret.length < 32) {
+      throw new InternalServerErrorException(
+        'Internal notification publisher is misconfigured. INTERNAL_SERVICE_SECRET must be at least 32 characters.'
+      );
+    }
+
+    if (!serviceKey || serviceKey !== internalSecret) {
       throw new ForbiddenException('Access to internal notification publisher is restricted.');
     }
 
