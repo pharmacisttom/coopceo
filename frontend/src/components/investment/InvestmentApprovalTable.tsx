@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAlert } from '../../hooks/useAlert';
-import { ShieldCheck, XCircle, CheckCircle2, Lock, Eye, AlertCircle } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
+import { useInvestmentPasskey } from '../../hooks/useAuth';
+import { Lock, Fingerprint, ShieldCheck } from 'lucide-react';
 
 export interface PendingInvestment {
   id: string;
@@ -12,98 +14,99 @@ export interface PendingInvestment {
   amount: number;
   expectedYield: number;
   tenorMonths: number;
-  makerName: string;
+  makerEmail: string;
   makerSubmittedAt: string;
   status: 'PENDING_CHECKER' | 'APPROVED' | 'REJECTED';
 }
 
-const INITIAL_PENDING: PendingInvestment[] = [
-  {
-    id: 'inv-101',
-    referenceId: 'INV-889102',
-    investmentType: 'พันธบัตรรัฐบาล (LB28DA)',
-    issuerName: 'กระทรวงการคลัง / ธนาคารแห่งประเทศไทย',
-    amount: 15000000,
-    expectedYield: 3.25,
-    tenorMonths: 36,
-    makerName: 'คุณสมชาย พัฒนากร (Maker)',
-    makerSubmittedAt: '2026-11-16 10:15',
-    status: 'PENDING_CHECKER',
-  },
-  {
-    id: 'inv-102',
-    referenceId: 'INV-889103',
-    investmentType: 'หุ้นกู้เอกชน ปตท. (PTT275A)',
-    issuerName: 'บมจ. ปตท. (อันดับเครดิต AAA)',
-    amount: 25000000,
-    expectedYield: 3.85,
-    tenorMonths: 24,
-    makerName: 'คุณสมชาย พัฒนากร (Maker)',
-    makerSubmittedAt: '2026-11-16 11:00',
-    status: 'PENDING_CHECKER',
-  },
-];
-
 export const InvestmentApprovalTable: React.FC = () => {
-  const [items, setItems] = useState<PendingInvestment[]>(INITIAL_PENDING);
-  const { confirm, criticalTransactionConfirm, stepUp2FA, success, warning, error, loading, closeLoading } = useAlert();
+  const [items, setItems] = useState<PendingInvestment[]>([]);
+  const { user } = useAuth();
+  const { confirm, success, warning, error, loading, closeLoading } = useAlert();
+  const { requestStepUpVerification, isVerifying } = useInvestmentPasskey();
+
+  const fetchProposals = async () => {
+    try {
+      const res = await fetch('/api/v1/investments', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        setItems(data);
+      }
+    } catch {
+      // Keep existing list if offline
+    }
+  };
+
+  useEffect(() => {
+    fetchProposals();
+  }, []);
 
   const handleApprove = async (item: PendingInvestment) => {
+    if (!user || user.role !== 'CHECKER') {
+      warning('สิทธิ์ไม่เพียงพอ', `คุณกำลังเข้าสู่ระบบด้วยบทบาท [${user?.role || 'Guest'}] เฉพาะผู้มีบทบาท [CHECKER] เท่านั้นที่สามารถอนุมัติรายการลงทุนได้`);
+      return;
+    }
+
+    // Segregation of duties front check
+    if (user.email.toLowerCase() === item.makerEmail.toLowerCase()) {
+      error('ตรวจพบการละเมิด Segregation of Duties', 'ผู้สร้างคำขอ (Maker) ไม่สามารถอนุมัติรายการของตนเองได้');
+      return;
+    }
+
     // 1. Initial Review Confirmation
     const initialConfirm = await confirm(
-      'ตรวจสอบและอนุมัติการลงทุน',
-      `คุณต้องการอนุมัติรายการ ${item.referenceId} วงเงิน ${item.amount.toLocaleString()} บาท หรือไม่?`,
+      'ตรวจสอบและอนุมัติการลงทุน (Checker Review)',
+      `คุณต้องการอนุมัติรายการ ${item.referenceId} วงเงิน ฿${item.amount.toLocaleString()} บาท หรือไม่?`,
       {
-        confirmButtonText: 'ดำเนินการต่อเพื่อยืนยัน Step-Up 2FA',
+        confirmButtonText: 'ดำเนินการต่อเพื่อยืนยัน Step-Up MFA',
         isGoldAccent: true,
       }
     );
 
     if (!initialConfirm.isConfirmed) return;
 
-    // 2. Step-up Authentication Prompt (WebAuthn / Passkey / TOTP)
-    const stepUpResult = await stepUp2FA(
-      `ยืนยันตัวตน Step-Up 2FA สำหรับรายการ ${item.referenceId}`
-    );
-
-    if (!stepUpResult.success) {
-      warning('การอนุมัติถูกยกเลิก', 'ไม่ได้รับรหัสยืนยันตัวตนระดับสูง');
+    // 2. Request Transaction-Bound Step-Up Challenge (Passkey or TOTP)
+    const stepUpResult = await requestStepUpVerification(item.referenceId, item.amount);
+    if (!stepUpResult.success || !stepUpResult.challengeId || !stepUpResult.stepUpToken) {
       return;
     }
 
-    // 3. Backend Verification with Non-dismissible Loading state (Rule 8 & Rule 9)
-    loading('กำลังบันทึกการอนุมัติทางบัญชี...', 'ระบบกำลังตรวจสอบสิทธิ์ Checker และบันทึก Audit Log');
+    // 3. Submit to backend with Non-dismissible Loading state (Rule 8 & 9)
+    loading('กำลังบันทึกการอนุมัติทางบัญชี...', 'ระบบกำลังตรวจสอบลายเซ็น Step-Up และบันทึก Audit Log');
 
-    setTimeout(async () => {
+    try {
+      const approveRes = await fetch(`/api/v1/investments/${item.referenceId}/checker-approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          challengeId: stepUpResult.challengeId,
+          stepUpToken: stepUpResult.stepUpToken,
+          mfaType: stepUpResult.mfaType || 'PASSKEY',
+        }),
+      });
+
       closeLoading();
+
+      if (!approveRes.ok) {
+        const errData = await approveRes.json().catch(() => ({}));
+        throw new Error(errData.message || 'การอนุมัติล้มเหลว');
+      }
+
+      const approveData = await approveRes.json();
 
       // Update State
       setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: 'APPROVED' as const } : i))
+        prev.map((i) => (i.referenceId === item.referenceId ? { ...i, status: 'APPROVED' as const } : i))
       );
 
       await success(
         'อนุมัติการลงทุนเรียบร้อย',
-        `รายการ ${item.referenceId} ได้รับการอนุมัติและผูกบัญชีการลงทุนแล้ว บันทึก Audit Log รหัส TX-${Date.now().toString().slice(-6)} เรียบร้อย`
+        `รายการ ${item.referenceId} ได้รับการอนุมัติและบันทึกประวัติการตรวจสอบสมบูรณ์ (Checker: ${user.fullName})`
       );
-    }, 1200);
-  };
-
-  const handleReject = async (item: PendingInvestment) => {
-    const rejectConfirm = await confirm(
-      'ปฏิเสธคำขอการลงทุน',
-      `คุณต้องการปฏิเสธรายการ ${item.referenceId} ใช่หรือไม่? รายการนี้จะถูกส่งกลับไปยังผู้สร้าง (Maker)`,
-      {
-        confirmButtonText: 'ยืนยันปฏิเสธ',
-        isDanger: true,
-      }
-    );
-
-    if (rejectConfirm.isConfirmed) {
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: 'REJECTED' as const } : i))
-      );
-      await warning('ปฏิเสธรายการแล้ว', `แจ้งเตือนไปยัง ${item.makerName} เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      closeLoading();
+      await error('การอนุมัติล้มเหลว', err?.message || 'ไม่สามารถบันทึกการอนุมัติได้');
     }
   };
 
@@ -119,12 +122,13 @@ export const InvestmentApprovalTable: React.FC = () => {
               คิวตรวจสอบและอนุมัติการลงทุน (Checker Role)
             </h3>
             <p className="text-xs text-slate-400">
-              บังคับใช้ Maker-Checker Dual Control และ Step-Up MFA ป้องกันการทุจริตภายในสหกรณ์
+              ผู้ตรวจสอบปัจจุบัน: <span className="text-amber-400 font-medium">{user ? user.fullName : 'รอเข้าสู่ระบบ'}</span>
             </p>
           </div>
         </div>
-        <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-900/40 text-amber-300 border border-amber-700/50">
-          Checker Authorization
+        <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-900/40 text-amber-300 border border-amber-700/50 flex items-center gap-1.5">
+          <Fingerprint className="w-3.5 h-3.5" />
+          Step-Up Passkey Protected
         </span>
       </div>
 
@@ -159,8 +163,7 @@ export const InvestmentApprovalTable: React.FC = () => {
                   <span className="text-slate-500 text-[11px]"> ({item.tenorMonths}ด.)</span>
                 </td>
                 <td className="py-3 px-3">
-                  <div className="text-slate-300">{item.makerName}</div>
-                  <div className="text-[10px] text-slate-500">{item.makerSubmittedAt}</div>
+                  <div className="text-slate-300 font-mono text-[11px]">{item.makerEmail}</div>
                 </td>
                 <td className="py-3 px-3 text-center">
                   {item.status === 'PENDING_CHECKER' && (
@@ -181,20 +184,14 @@ export const InvestmentApprovalTable: React.FC = () => {
                 </td>
                 <td className="py-3 px-3 text-right space-x-2">
                   {item.status === 'PENDING_CHECKER' ? (
-                    <>
-                      <button
-                        onClick={() => handleReject(item)}
-                        className="px-2.5 py-1.5 rounded-lg border border-rose-800/40 text-rose-400 hover:bg-rose-950/40 text-xs transition-colors"
-                      >
-                        ปฏิเสธ
-                      </button>
-                      <button
-                        onClick={() => handleApprove(item)}
-                        className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20"
-                      >
-                        อนุมัติ (Step-Up)
-                      </button>
-                    </>
+                    <button
+                      onClick={() => handleApprove(item)}
+                      disabled={isVerifying}
+                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20 flex items-center gap-1.5 ml-auto"
+                    >
+                      <Fingerprint className="w-3.5 h-3.5" />
+                      อนุมัติ (Step-Up)
+                    </button>
                   ) : (
                     <span className="text-[11px] text-slate-500 italic">ดำเนินการแล้ว</span>
                   )}
@@ -209,4 +206,3 @@ export const InvestmentApprovalTable: React.FC = () => {
 };
 
 export default InvestmentApprovalTable;
-
